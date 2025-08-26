@@ -6,6 +6,7 @@ import time
 import pandas as pd
 from dotenv import load_dotenv
 from striprtf.striprtf import rtf_to_text
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- Load Environment Variables ---
 load_dotenv()
@@ -45,16 +46,27 @@ with st.sidebar:
          "models/gemini-1.5-flash", "models/gemini-pro")
     )
     st.markdown("---")
+    # --- Concurrency Setting ---
+    st.header("Concurrency Settings")
+    max_workers = st.slider(
+        "Number of concurrent AI requests (threads):",
+        min_value=1,
+        max_value=20, # You can adjust this based on your API rate limits and machine's capability
+        value=10,
+        help="Higher values can speed up processing, but may hit API rate limits or consume more resources."
+    )
+    st.markdown("---")
     st.header("How to Use")
     st.markdown(
         """
         1.  Ensure your API key is in a `.env` file or enter it manually.
         2.  Choose your desired LLM model.
-        3.  Choose your input: upload a file or paste text.
+        3.  Adjust the number of concurrent AI requests.
+        4.  Choose your input: upload a file or paste text.
             - If uploading a CSV, select the column to process.
-        4.  Write your detailed prompt for the AI.
-        5.  Select your desired output method.
-        6.  Click "Process Text" to get the results.
+        5.  Write your detailed prompt for the AI.
+        6.  Select your desired output method.
+        7.  Click "Process Text" to get the results.
         """
     )
 
@@ -62,7 +74,7 @@ with st.sidebar:
 st.header("1. Provide Your Text")
 
 text_data = None
-df = None  # --- ADDED: Initialize df to handle CSV data state
+df = None
 
 # --- Input Method Tabs ---
 input_tab1, input_tab2 = st.tabs(["Upload a File", "Paste Text"])
@@ -75,18 +87,20 @@ with input_tab1:
 
         try:
             if file_extension == ".txt":
+                # Ensure correct decoding for input files if they contain non-ASCII characters
                 stringio = io.StringIO(uploaded_file.getvalue().decode("utf-8"))
                 text_data = stringio.read()
             elif file_extension == ".rtf":
-                rtf_content = uploaded_file.getvalue().decode('ascii', errors='ignore')
+                # RTF to text conversion often handles various encodings, but good to note
+                rtf_content = uploaded_file.getvalue().decode('ascii', errors='ignore') # Assuming RTF generally uses ASCII or similar for control, content might need specific handling
                 text_data = rtf_to_text(rtf_content)
             elif file_extension == ".csv":
-                df = pd.read_csv(uploaded_file)
+                # For CSV input, ensure pandas reads with UTF-8 if it might contain non-ASCII
+                df = pd.read_csv(uploaded_file, encoding='utf-8') # Added encoding='utf-8' here for reading CSV
                 st.info("CSV file uploaded successfully. Please select the column to process.")
                 st.dataframe(df.head())
                 column_to_process = st.selectbox("Select the column containing the text to process:", df.columns)
                 if column_to_process:
-                    # Ensure all data in the column is treated as a string, handling potential empty values
                     text_data = "\n".join(df[column_to_process].dropna().astype(str).tolist())
 
             if file_extension != ".csv":
@@ -111,15 +125,43 @@ ai_prompt = st.text_area(
 st.header("3. Choose Your Output Method")
 output_method = st.radio(
     "How would you like to receive the results?",
-    ("Display on screen", "Write to a file")
+    ("Display on screen", "Download as a file")
 )
 
-output_filename = ""
-if output_method == "Write to a file":
-    output_filename = st.text_input("Enter the name for your output file (e.g., results.csv):",
-                                    "ai_processed_output.csv")
+output_filename = "ai_processed_output.csv"
+if output_method == "Download as a file":
+    output_filename = st.text_input(
+        "Enter the desired filename (e.g., results.csv):",
+        "ai_processed_output.csv",
+        help="The file will be downloaded to your browser's default download location, or you will be prompted to choose one."
+    )
 
 st.markdown("---")
+
+# --- Function to process a single line with AI ---
+def process_single_line(line_index, line_text, ai_prompt_template, model_instance):
+    full_prompt = f"PROMPT: '{ai_prompt_template}'\n\n---\n\nTEXT TO PROCESS: \"{line_text}\""
+    start_time = time.monotonic()
+    try:
+        # Use parts array for multimodal and conversational context, even for text-only
+        response = model_instance.generate_content([{"role": "user", "parts": [full_prompt]}])
+        end_time = time.monotonic()
+        processing_time = end_time - start_time
+        return {
+            "index": line_index,
+            "Input Text": line_text,
+            "AI Response": response.text,
+            "Processing Time (s)": f"{processing_time:.2f}"
+        }
+    except Exception as e:
+        end_time = time.monotonic()
+        processing_time = end_time - start_time
+        return {
+            "index": line_index,
+            "Input Text": line_text,
+            "AI Response": f"ERROR: {e}",
+            "Processing Time (s)": f"{processing_time:.2f}"
+        }
 
 # --- Processing and Output ---
 if st.button("Process Text", type="primary"):
@@ -138,63 +180,74 @@ if st.button("Process Text", type="primary"):
             total_lines = len(lines)
 
             st.header("✅ Results")
-            st.write(f"Processing {total_lines} lines of text using {model_name}...")
+            st.write(f"Processing {total_lines} lines of text using {model_name} with {max_workers} concurrent requests...")
 
             total_start_time = time.monotonic()
-            results_for_file = []
+            results_for_file = [None] * total_lines
 
-            # --- ADDED: Initialize progress bar and status text ---
             progress_bar = st.progress(0)
             status_text = st.empty()
+            processed_count = 0
 
-            for i, line in enumerate(lines):
-                full_prompt = f"PROMPT: '{ai_prompt}'\n\n---\n\nTEXT TO PROCESS: \"{line}\""
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_line = {executor.submit(process_single_line, i, line, ai_prompt, model): i for i, line in enumerate(lines)}
 
-                try:
-                    start_time = time.monotonic()
-                    response = model.generate_content([{"role": "user", "parts": [full_prompt]}])
-                    end_time = time.monotonic()
-                    processing_time = end_time - start_time
+                for future in as_completed(future_to_line):
+                    result = future.result()
+                    results_for_file[result["index"]] = result
+                    processed_count += 1
 
-                    if output_method == "Display on screen":
-                        with st.expander(f"**Line {i + 1}:** {line[:80]}...", expanded=True):
-                            st.markdown("**AI Response:**")
-                            st.markdown(response.text)
-                            st.info(f"Processing time: {processing_time:.2f} seconds")
-                    else:
-                        results_for_file.append({"Input Text": line, "AI Response": response.text,
-                                                 "Processing Time (s)": f"{processing_time:.2f}"})
-
-                except Exception as e:
-                    if output_method == "Display on screen":
-                        with st.expander(f"**Line {i + 1}:** {line[:80]}...", expanded=True):
-                            st.error(f"Could not process this line. Error: {e}")
-                    else:
-                        results_for_file.append(
-                            {"Input Text": line, "AI Response": f"ERROR: {e}", "Processing Time (s)": "N/A"})
-
-                # --- ADDED: Update progress bar and status text ---
-                progress_percentage = (i + 1) / total_lines
-                progress_bar.progress(progress_percentage)
-                status_text.text(f"Processing line {i + 1}/{total_lines}... ({progress_percentage:.0%})")
+                    progress_percentage = processed_count / total_lines
+                    progress_bar.progress(progress_percentage)
+                    status_text.text(f"Processed {processed_count}/{total_lines} lines... ({progress_percentage:.0%})")
 
             total_end_time = time.monotonic()
             total_processing_time = total_end_time - total_start_time
 
-            # --- MODIFIED: Clear progress elements and show success message ---
             status_text.empty()
             progress_bar.empty()
             st.success(f"All {total_lines} lines have been processed! Total time: {total_processing_time:.2f} seconds")
 
-            if output_method == "Write to a file":
-                results_df = pd.DataFrame(results_for_file)
-                csv = results_df.to_csv(index=False).encode('utf-8')
+            if output_method == "Display on screen":
+                for result in results_for_file:
+                    if result:
+                        if "ERROR" in result["AI Response"]:
+                            with st.expander(f"**Line {result['index'] + 1}:** {result['Input Text'][:80]}...", expanded=True):
+                                st.error(f"Could not process this line. Error: {result['AI Response']}")
+                                st.info(f"Processing time: {result['Processing Time (s)']}")
+                        else:
+                            with st.expander(f"**Line {result['index'] + 1}:** {result['Input Text'][:80]}...", expanded=True):
+                                st.markdown("**AI Response:**")
+                                st.markdown(result["AI Response"])
+                                st.info(f"Processing time: {result['Processing Time (s)']} seconds")
+
+            # Handle file output (download)
+            if output_method == "Download as a file":
+                results_df_data = [{k: v for k, v in res.items() if k != 'index'} for res in results_for_file if res is not None]
+                results_df = pd.DataFrame(results_df_data)
+
+                # --- START OF MODIFIED/ADDED CODE FOR ENCODING ---
+                # Use StringIO to capture the CSV directly as a string with UTF-8 encoding.
+                # This ensures pandas writes the characters correctly into the string buffer.
+                csv_buffer = io.StringIO()
+                results_df.to_csv(csv_buffer, index=False, encoding='utf-8')
+                csv_string_for_download = csv_buffer.getvalue()
+
+                # Prepend the UTF-8 Byte Order Mark (BOM) to the string before encoding to bytes.
+                # The BOM helps applications like Microsoft Excel automatically detect UTF-8.
+                # It's a specific sequence of bytes: b'\xef\xbb\xbf'
+                csv_bytes_with_bom = b'\xef\xbb\xbf' + csv_string_for_download.encode('utf-8')
+
                 st.download_button(
-                    label="Download Results as CSV",
-                    data=csv,
+                    label=f"Download '{output_filename}'",
+                    data=csv_bytes_with_bom, # Pass the byte string with BOM to the download button
                     file_name=output_filename,
                     mime='text/csv',
+                    key='download_csv_button'
                 )
+                # --- END OF MODIFIED/ADDED CODE FOR ENCODING ---
+                st.info("The file will be downloaded via your browser. You can usually choose the save location in the download dialog. If opening in Excel, ensure it's imported as UTF-8.")
+
 
         except Exception as e:
             st.error(f"An error occurred while configuring the AI model: {e}")
