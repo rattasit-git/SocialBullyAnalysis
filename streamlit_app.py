@@ -41,9 +41,9 @@ with st.sidebar:
     st.header("Choose LLM Model")
     model_name = st.selectbox(
         "Select the model to use:",
-        ("models/gemini-1.5-pro", "models/gemini-1.5-flash", "models/gemini-pro")
+        ("models/gemini-2.5-pro", "models/gemini-2.5-flash", "models/gemini-2.5-flash-lite", "models/gemini-1.5-pro",
+         "models/gemini-1.5-flash", "models/gemini-pro")
     )
-
     st.markdown("---")
     st.header("How to Use")
     st.markdown(
