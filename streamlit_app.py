@@ -209,17 +209,19 @@ if st.button("Process Text", type="primary"):
             st.success(f"All {total_lines} lines have been processed! Total time: {total_processing_time:.2f} seconds")
 
             if output_method == "Display on screen":
+                combined_texts = []
                 for result in results_for_file:
                     if result:
+                        header = f"Line {result['index'] + 1}: {result['Input Text'][:80]}"
                         if "ERROR" in result["AI Response"]:
-                            with st.expander(f"**Line {result['index'] + 1}:** {result['Input Text'][:80]}...", expanded=True):
-                                st.error(f"Could not process this line. Error: {result['AI Response']}")
-                                st.info(f"Processing time: {result['Processing Time (s)']}")
+                            combined_texts.append(
+                                f"{header}\nERROR: Could not process this line. Details: {result['AI Response']}\nProcessing time: {result['Processing Time (s)']} s\n")
                         else:
-                            with st.expander(f"**Line {result['index'] + 1}:** {result['Input Text'][:80]}...", expanded=True):
-                                st.markdown("**AI Response:**")
-                                st.markdown(result["AI Response"])
-                                st.info(f"Processing time: {result['Processing Time (s)']} seconds")
+                            combined_texts.append(
+                                f"{header}\nAI Response: {result['AI Response']}\nProcessing time: {result['Processing Time (s)']} s\n")
+
+                all_results = "\n".join(combined_texts)
+                st.text_area("All Results", all_results, height=600, max_chars=None)
 
             # Handle file output (download)
             if output_method == "Download as a file":
