@@ -40,10 +40,14 @@ with st.sidebar:
 
     # --- LLM Model Selection ---
     st.header("Choose LLM Model")
+    #model_name = st.selectbox(
+    #    "Select the model to use:",
+    #    ("models/gemini-2.5-pro", "models/gemini-2.5-flash", "models/gemini-2.5-flash-lite", "models/gemini-1.5-pro",
+    #     "models/gemini-1.5-flash", "models/gemini-pro")
+    #)
     model_name = st.selectbox(
         "Select the model to use:",
-        ("models/gemini-2.5-pro", "models/gemini-2.5-flash", "models/gemini-2.5-flash-lite", "models/gemini-1.5-pro",
-         "models/gemini-1.5-flash", "models/gemini-pro")
+        ("models/gemini-2.5-flash", "models/gemini-2.5-flash-lite")
     )
     st.markdown("---")
     # --- Concurrency Setting ---
