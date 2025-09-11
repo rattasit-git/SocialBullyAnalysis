@@ -47,7 +47,7 @@ with st.sidebar:
     #)
     model_name = st.selectbox(
         "Select the model to use:",
-        ("models/gemini-2.5-flash", "models/gemini-2.5-flash-lite")
+        ("models/gemini-2.5-flash", "models/gemini-2.5-flash-lite", "models/gemini-2.5-pro")
     )
     st.markdown("---")
     # --- Concurrency Setting ---
